@@ -6,6 +6,7 @@
 3)	После наводим на кнопку Downloads и выбираем версию python
 <img width="773" height="514" alt="image" src="https://github.com/user-attachments/assets/fc7f8979-3c0e-4979-ad92-71d4d7ef6a51" />
 5)	Открываем установочный файл и выбираем «Add python to PATH»
+
 <img width="780" height="482" alt="image" src="https://github.com/user-attachments/assets/5bafe5bb-a852-4d0d-afcd-b4a2dfbd74ed" />
 6)	После идем далее по установке. 
 7)	Чтобы проверить установился Python на компьютер – достаточно проверить в поиске его наличие
