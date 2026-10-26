@@ -1,0 +1,622 @@
+
+# Лекция: Декораторы
+
+## 1. Идея
+
+> [!note] Определение
+> **Декоратор** это функция, которая принимает функцию и возвращает новую функцию с расширенным поведением. Исходный код функции при этом не меняется.
+
+> [!tip] Аналогия
+> Подарок и упаковка. Сам подарок (функция) остаётся прежним, а упаковка (декоратор) добавляет к нему что-то новое: ленточку, открытку, защиту.
+
+Типичные задачи декораторов:
+
+- замер времени работы
+- логирование вызовов
+- проверка прав доступа
+- кэширование результатов
+- повторные попытки при ошибке
+- проверка аргументов
+
+---
+
+## 2. Что нужно знать заранее
+
+### 2.1 Функции это объекты
+
+Функцию можно присвоить переменной, положить в список и передать как аргумент.
+
+```python
+def hello():
+    print("Привет")
+
+greet = hello          # без скобок: это сам объект, не вызов
+greet()                # Привет
+
+funcs = [hello, print, len]
+```
+
+### 2.2 Функция как аргумент
+
+```python
+def apply(func, value):
+    return func(value)
+
+print(apply(len, "Python"))      # 6
+print(apply(str.upper, "abc"))   # ABC
+```
+
+### 2.3 Функция внутри функции и возврат функции
+
+```python
+def make_multiplier(k):
+    def multiply(x):
+        return x * k
+    return multiply              # возвращаем функцию, не вызываем
+
+double = make_multiplier(2)
+triple = make_multiplier(3)
+print(double(5))   # 10
+print(triple(5))   # 15
+```
+
+### 2.4 Замыкание (closure)
+
+> [!note] Замыкание
+> Внутренняя функция **запоминает** переменные из внешней функции, даже когда внешняя уже завершилась. В примере выше `multiply` помнит `k`.
+
+Изменить запомненную переменную можно через `nonlocal`:
+
+```python
+def counter():
+    count = 0
+    def inc():
+        nonlocal count
+        count += 1
+        return count
+    return inc
+
+c = counter()
+print(c(), c(), c())   # 1 2 3
+```
+
+> [!important] Декоратор = функция + замыкание
+> Если понятны пункты 2.1-2.4, декораторы уже по сути понятны.
+
+---
+
+## 3. Первый декоратор
+
+### 3.1 Вручную
+
+```python
+def shout(func):
+    def wrapper():
+        print("--- до вызова ---")
+        func()
+        print("--- после вызова ---")
+    return wrapper
+
+def hello():
+    print("Привет")
+
+hello = shout(hello)     # подменяем функцию обёрнутой версией
+hello()
+```
+
+Вывод:
+
+```
+--- до вызова ---
+Привет
+--- после вызова ---
+```
+
+### 3.2 Синтаксис `@`
+
+Запись `@shout` это сокращение для `hello = shout(hello)`.
+
+```python
+@shout
+def hello():
+    print("Привет")
+```
+
+> [!tip] Когда выполняется
+> Декоратор срабатывает **один раз, в момент определения функции**, а не при каждом вызове. При каждом вызове работает `wrapper`.
+
+---
+
+## 4. Аргументы и возвращаемое значение
+
+Обёртка должна принимать любые аргументы и возвращать результат оригинала.
+
+```python
+def log_calls(func):
+    def wrapper(*args, **kwargs):
+        print(f"Вызов {func.__name__} с {args}, {kwargs}")
+        result = func(*args, **kwargs)
+        print(f"Результат: {result}")
+        return result                    # не забываем return!
+    return wrapper
+
+@log_calls
+def add(a, b):
+    return a + b
+
+add(2, b=3)
+```
+
+> [!info] Что значит `*args, **kwargs`
+> `*args` собирает все позиционные аргументы в кортеж, `**kwargs` собирает именованные в словарь. Так обёртка подходит к функции с **любой** сигнатурой.
+
+---
+
+## 5. `functools.wraps`: сохраняем «паспорт» функции
+
+Без `wraps` декорированная функция теряет имя и документацию:
+
+```python
+@log_calls
+def add(a, b):
+    """Складывает два числа"""
+    return a + b
+
+print(add.__name__)   # wrapper  (а не add!)
+print(add.__doc__)    # None
+```
+
+Исправление:
+
+```python
+from functools import wraps
+
+def log_calls(func):
+    @wraps(func)                         # копирует __name__, __doc__ и т. д.
+    def wrapper(*args, **kwargs):
+        result = func(*args, **kwargs)
+        return result
+    return wrapper
+```
+
+> [!important] Правило
+> **Всегда** добавляйте `@wraps(func)` в обёртку. Иначе ломаются отладка, документация и интроспекция.
+
+### Шаблон декоратора (запомнить)
+
+```python
+from functools import wraps
+
+def my_decorator(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        # код ДО
+        result = func(*args, **kwargs)
+        # код ПОСЛЕ
+        return result
+    return wrapper
+```
+
+---
+
+## 6. Декораторы с параметрами
+
+Нужно **три уровня** вложенности:
+
+1. внешняя функция принимает параметры декоратора;
+2. средняя принимает функцию;
+3. внутренняя это сама обёртка.
+
+```python
+from functools import wraps
+
+def repeat(times):                       # уровень 1: параметры
+    def decorator(func):                 # уровень 2: функция
+        @wraps(func)
+        def wrapper(*args, **kwargs):    # уровень 3: обёртка
+            result = None
+            for _ in range(times):
+                result = func(*args, **kwargs)
+            return result
+        return wrapper
+    return decorator
+
+@repeat(times=3)
+def say(text):
+    print(text)
+
+say("Привет")    # напечатает три раза
+```
+
+> [!tip] Как читать
+> `@repeat(3)` сначала **вызывает** `repeat(3)`, получает `decorator`, и уже им декорирует функцию. То есть `say = repeat(3)(say)`.
+
+### Декоратор, работающий и со скобками, и без
+
+```python
+def smart(func=None, *, prefix="LOG"):
+    def decorator(f):
+        @wraps(f)
+        def wrapper(*a, **k):
+            print(f"[{prefix}] {f.__name__}")
+            return f(*a, **k)
+        return wrapper
+    if func is None:          # вызвали как @smart(prefix="X")
+        return decorator
+    return decorator(func)    # вызвали как @smart
+
+@smart
+def a(): ...
+
+@smart(prefix="DEBUG")
+def b(): ...
+```
+
+---
+
+## 7. Несколько декораторов
+
+```python
+def bold(f):
+    @wraps(f)
+    def w(*a, **k): return f"<b>{f(*a, **k)}</b>"
+    return w
+
+def italic(f):
+    @wraps(f)
+    def w(*a, **k): return f"<i>{f(*a, **k)}</i>"
+    return w
+
+@bold
+@italic
+def text():
+    return "Привет"
+
+print(text())    # <b><i>Привет</i></b>
+```
+
+> [!warning] Порядок
+> Применяются **снизу вверх**: `text = bold(italic(text))`. Ближайший к функции декоратор оборачивает её первым, верхний находится снаружи.
+
+Схема вызова: `bold.wrapper` → `italic.wrapper` → `text`.
+
+---
+
+## 8. Декораторы-классы
+
+Если у класса есть метод `__call__`, объект можно вызывать как функцию. Это удобно, когда декоратору нужно **хранить состояние**.
+
+```python
+from functools import update_wrapper
+
+class CountCalls:
+    def __init__(self, func):
+        update_wrapper(self, func)       # аналог @wraps для классов
+        self.func = func
+        self.count = 0
+
+    def __call__(self, *args, **kwargs):
+        self.count += 1
+        print(f"Вызов №{self.count}")
+        return self.func(*args, **kwargs)
+
+@CountCalls
+def hi():
+    print("Привет")
+
+hi()
+hi()
+print(hi.count)    # 2
+```
+
+> [!warning] Ограничение
+> Класс-декоратор **не превращается в метод** при использовании внутри класса: `self` не передаётся автоматически. Для методов безопаснее декоратор-функция.
+
+---
+
+## 9. Декорирование классов
+
+Декоратор может принять **класс** и вернуть изменённый класс.
+
+```python
+def add_repr(cls):
+    def __repr__(self):
+        attrs = ", ".join(f"{k}={v!r}" for k, v in vars(self).items())
+        return f"{cls.__name__}({attrs})"
+    cls.__repr__ = __repr__
+    return cls
+
+@add_repr
+class Point:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+print(Point(1, 2))     # Point(x=1, y=2)
+```
+
+### Синглтон через декоратор
+
+```python
+def singleton(cls):
+    instances = {}
+    @wraps(cls)
+    def get_instance(*args, **kwargs):
+        if cls not in instances:
+            instances[cls] = cls(*args, **kwargs)
+        return instances[cls]
+    return get_instance
+
+@singleton
+class Config:
+    pass
+
+print(Config() is Config())   # True
+```
+
+> [!warning] Минус
+> После такого декорирования `Config` это уже функция, а не класс: `isinstance(x, Config)` не сработает, наследоваться нельзя.
+
+---
+
+## 10. Встроенные декораторы
+
+| Декоратор | Что делает |
+|---|---|
+| `@property` | Метод превращается в атрибут (геттер/сеттер) |
+| `@classmethod` | Метод получает класс (`cls`) вместо экземпляра |
+| `@staticmethod` | Обычная функция внутри класса, без `self` и `cls` |
+| `@abstractmethod` | Метод обязан быть переопределён в потомке |
+| `@functools.wraps` | Сохраняет метаданные функции |
+| `@functools.lru_cache` | Кэширует результаты по аргументам |
+| `@functools.cache` | То же без ограничения размера (3.9+) |
+| `@functools.cached_property` | Свойство, вычисляемое один раз |
+| `@functools.total_ordering` | Достраивает операторы сравнения |
+| `@functools.singledispatch` | Перегрузка функции по типу первого аргумента |
+| `@dataclasses.dataclass` | Автоматически создаёт `__init__`, `__repr__`, `__eq__` |
+| `@contextlib.contextmanager` | Контекстный менеджер из функции с `yield` |
+
+### Кэширование
+
+```python
+from functools import lru_cache
+
+@lru_cache(maxsize=None)
+def fib(n):
+    return n if n < 2 else fib(n - 1) + fib(n - 2)
+
+print(fib(80))             # мгновенно
+print(fib.cache_info())    # статистика попаданий в кэш
+```
+
+> [!info] Ограничение
+> Аргументы кэшируемой функции должны быть **хешируемыми**: списки и словари не подойдут.
+
+### `singledispatch`
+
+```python
+from functools import singledispatch
+
+@singledispatch
+def show(x):
+    print("Что-то:", x)
+
+@show.register(int)
+def _(x):
+    print("Целое:", x)
+
+@show.register(list)
+def _(x):
+    print("Список из", len(x), "элементов")
+
+show(5)         # Целое: 5
+show([1, 2])    # Список из 2 элементов
+show("a")       # Что-то: a
+```
+
+---
+
+## 11. Практические примеры
+
+### Замер времени
+
+```python
+import time
+from functools import wraps
+
+def timer(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.perf_counter()
+        result = func(*args, **kwargs)
+        elapsed = time.perf_counter() - start
+        print(f"{func.__name__} выполнилась за {elapsed:.4f} с")
+        return result
+    return wrapper
+```
+
+### Повтор при ошибке
+
+```python
+def retry(times=3, delay=0.0):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_error = None
+            for attempt in range(1, times + 1):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_error = e
+                    print(f"Попытка {attempt}/{times} не удалась: {e}")
+                    time.sleep(delay)
+            raise last_error
+        return wrapper
+    return decorator
+```
+
+### Проверка аргументов
+
+```python
+def positive_args(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        for a in (*args, *kwargs.values()):
+            if a <= 0:
+                raise ValueError(f"Аргумент {a} должен быть положительным")
+        return func(*args, **kwargs)
+    return wrapper
+```
+
+### Регистрация функций (плагины)
+
+```python
+registry = {}
+
+def register(name):
+    def decorator(func):
+        registry[name] = func      # функция возвращается без изменений
+        return func
+    return decorator
+
+@register("add")
+def add(a, b): return a + b
+
+@register("mul")
+def mul(a, b): return a * b
+
+print(registry["add"](2, 3))   # 5
+```
+
+> [!tip] Декоратор не обязан оборачивать
+> Он может просто зарегистрировать функцию и вернуть её как есть.
+
+---
+
+## 12. Как это связано с ООП
+
+| Декоратор | Где встретится |
+|---|---|
+| `@property`, `@x.setter` | Инкапсуляция |
+| `@classmethod`, `@staticmethod` | Виды методов, альтернативные конструкторы |
+| `@abstractmethod` | Абстракция, интерфейсы |
+| `@total_ordering` | Магические методы сравнения |
+| `@dataclass` | Классы данных |
+
+> [!note] Как работает `@property` внутри
+> `property` это класс-**дескриптор**. Запись `@property` по сути делает `age = property(age)`. Детально разберём в теме про дескрипторы.
+
+---
+
+## 13. Типичные ошибки
+
+> [!warning] Проверьте свой код
+> 1. Забыли `return result` в обёртке: функция всегда возвращает `None`.
+> 2. Забыли `@wraps`: теряется имя и документация.
+> 3. Забыли `*args, **kwargs`: обёртка ломается на функциях с аргументами.
+> 4. Написали `@repeat` вместо `@repeat(3)` у декоратора с параметрами (или наоборот).
+> 5. Перепутали порядок стековых декораторов.
+> 6. Вызвали функцию внутри декоратора со скобками: `return wrapper()` вместо `return wrapper`.
+> 7. Применили `lru_cache` к функции с изменяемыми аргументами.
+
+---
+
+## Задания
+
+> [!question] Задание 1: timer
+> Напишите декоратор `timer`, который печатает время выполнения функции. Проверьте на функции, суммирующей числа от 0 до 1 000 000.
+
+> [!question] Задание 2: log_calls
+> Декоратор печатает имя функции, аргументы и результат. Сохраните имя и docstring через `wraps`.
+
+> [!question] Задание 3: repeat
+> Декоратор с параметром `repeat(n)` вызывает функцию `n` раз и возвращает результат **последнего** вызова.
+
+> [!question] Задание 4: validate
+> Декоратор `positive_args` выбрасывает `ValueError`, если хотя бы один аргумент не положителен. Проверьте на `area(w, h)`.
+
+> [!question] Задание 5: memoize
+> Напишите свой кэширующий декоратор `memoize` на словаре (без `functools`). Проверьте на числах Фибоначчи.
+
+> [!question] Задание 6: счётчик вызовов
+> Напишите декоратор-**класс** `CountCalls` со счётчиком `count`, как в разделе 8, но дополнительно метод `reset()`, сбрасывающий счётчик.
+
+> [!question] Задание 7: предскажите вывод
+> ```python
+> def a(f):
+>     def w():
+>         print("a до"); f(); print("a после")
+>     return w
+>
+> def b(f):
+>     def w():
+>         print("b до"); f(); print("b после")
+>     return w
+>
+> @a
+> @b
+> def hello():
+>     print("hello")
+>
+> hello()
+> ```
+
+> [!question] Задание 8: права доступа
+> Декоратор `require_role(role)`. Первый аргумент функции это словарь пользователя `{"name": ..., "roles": [...]}`. Если нужной роли нет, выбросить `PermissionError`.
+
+> [!question] Задание 9: найдите ошибки
+> ```python
+> def deco(func):
+>     def wrapper(*args, **kwargs):
+>         print("вызов")
+>         func(*args, **kwargs)
+>     return wrapper
+>
+> @deco
+> def add(a, b):
+>     """Сложение"""
+>     return a + b
+>
+> print(add(2, 3))
+> print(add.__name__)
+> ```
+> Что выведется? Найдите **две** проблемы и исправьте.
+
+> [!question] Задание 10: retry
+> Напишите `retry(times)`, который повторяет вызов при исключении и после `times` неудач пробрасывает последнюю ошибку. Проверьте на функции, которая падает первые два раза.
+
+---
+
+## Решения
+
+### Задание 1
+
+```python
+import time
+from functools import wraps
+
+def timer(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.perf_counter()
+        result = func(*args, **kwargs)
+        print(f"{func.__name__}: {time.perf_counter() - start:.4f} с")
+        return result
+    return wrapper
+
+@timer
+def total(n):
+    s = 0
+    for i in range(n):
+        s += i
+    return s
+
+print(total(1_000_000))
+```
+
+### Задание 2
+
+```python
+def log_calls(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
